@@ -9,9 +9,11 @@
   vars:
     registro_clave: "{{ lookup('ansible.builtin.env', 'REGISTRO_CLAVE') }}"
   tasks:
-    - name: El programa sqlite3 está instalado
+    - name: Los programas sqlite3 y python3-venv están instalados
       ansible.builtin.apt:
-        name: sqlite3
+        name:
+          - sqlite3
+          - python3-venv
         state: present
         update_cache: true
         cache_valid_time: 3600
@@ -38,6 +40,7 @@
         state: directory
         owner: registro
         group: registro
+        mode: "0755"
 
     - name: Está app.py en el servidor
       ansible.builtin.copy:
@@ -72,15 +75,49 @@
         mode: "0600"
       no_log: true
 
+    - name: Existe el ambiente virtual con las dependencias de la aplicación
+      ansible.builtin.pip:
+        requirements: /opt/registro/requirements.txt
+        virtualenv: /opt/registro/.venv
+        virtualenv_command: python3 -m venv
+
+    - name: El ambiente virtual pertenece al usuario registro
+      ansible.builtin.file:
+        path: /opt/registro/.venv
+        state: directory
+        recurse: true
+        owner: registro
+        group: registro
+
+    - name: Existe la base de datos vacía de la aplicación
+      ansible.builtin.command:
+        cmd: /opt/registro/.venv/bin/python /opt/registro/crear_db.py
+        creates: /opt/registro/registro.db
+      environment:
+        REGISTRO_DB: /opt/registro/registro.db
+
+    - name: Se consulta si ya existe la visita de verificación
+      ansible.builtin.command: >
+        sqlite3 /opt/registro/registro.db
+        "SELECT COUNT(*) FROM visitas WHERE nombre = 'Prueba de aprovisionamiento';"
+      register: visitas_prueba
+      changed_when: false
+
+    - name: Existe la visita de verificación en la base de datos
+      ansible.builtin.command: >
+        sqlite3 /opt/registro/registro.db
+        "INSERT INTO visitas (nombre, momento) VALUES ('Prueba de aprovisionamiento', '2026-10-27 18:30');"
+      when: visitas_prueba.stdout | trim == '0'
+
+    - name: La base de datos pertenece al usuario registro
+      ansible.builtin.file:
+        path: /opt/registro/registro.db
+        owner: registro
+        group: registro
+        mode: "0644"
+
     - name: El aviso aparece al abrir la terminal
       become: false
       ansible.builtin.lineinfile:
         path: "{{ lookup('env', 'HOME') }}/.bashrc"
         line: 'echo "*** SERVIDOR DE PRUEBAS - Registro de Visitas ***"'
-
-    # Parte 5: comentada porque acumula una visita en cada corrida (ver PROVISION.md).
-    # - name: La base existe con la visita de verificación
-    #   ansible.builtin.command: >
-    #     sqlite3 /opt/registro/registro.db
-    #     "CREATE TABLE IF NOT EXISTS visitas (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL, momento TEXT NOT NULL);
-    #      INSERT INTO visitas (nombre, momento) VALUES ('Prueba de aprovisionamiento', '2026-10-27 18:30');"
